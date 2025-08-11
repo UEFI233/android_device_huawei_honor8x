@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 拉取仓库代码
+      - name: 拉取内核源码仓库
         uses: actions/checkout@v4
 
       - name: 安装基础依赖
@@ -23,7 +23,7 @@ jobs:
           sudo apt install -y build-essential libncurses5-dev libssl-dev \
             flex bison bc git wget curl unzip
 
-      - name: 安装Python 2.7
+      - name: 安装Python 2.7并添加软链接
         run: |
           wget https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar -xf Python-2.7.18.tgz
@@ -31,25 +31,26 @@ jobs:
           ./configure --prefix=/usr/local
           make -j$(nproc)
           sudo make install
+          # 仅添加Python软链接（满足编译依赖）
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python
 
-      - name: 克隆GCC交叉编译器
+      - name: 克隆GCC交叉编译器仓库
         run: |
-          if [ ! -d "gcc" ]; then
-            git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc
-          fi
-          ls gcc/bin/aarch64-linux-android-gcc || { echo "GCC缺失"; exit 1; }
-          echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
+          git clone https://github.com/Adrilaw/aarch64-linux-android-4.9-toolchain gcc
+          ls gcc/bin/aarch64-linux-android-gcc || { echo "GCC编译器缺失"; exit 1; }
 
       - name: 清理Kconfig无效字符
         run: |
           find . -name "Kconfig" -exec sed -i 's/[^[:print:]\t\n]//g' {} +
 
-      - name: 编译内核
+      - name: 在GCC目录下编译内核
         run: |
+          cd gcc
+          export KERNEL_SRC=$(dirname $(pwd))  # 内核源码在GCC目录的上一级
           export ARCH=arm64
-          export CROSS_COMPILE=${{ env.CC_PATH }}/aarch64-linux-android-
-          ${CROSS_COMPILE}gcc --version
+          export CROSS_COMPILE=$(pwd)/bin/aarch64-linux-android-
+          ${CROSS_COMPILE}gcc --version  # 验证编译器
+          cd $KERNEL_SRC
           make O=out merge_kirin710_defconfig
           make O=out -j$(nproc)
 
@@ -66,42 +67,5 @@ jobs:
           tag_name: kernel-${{ github.sha }}
           files: tools/KernelSU_*.img
           body: "华为Kirin710内核（EMUI9.1）自动编译版本"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
-      - name: 获取华为GCC交叉编译器
-        run: |
-          # 使用正确的Google源aarch64-linux-android-4.9编译器
-          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/  +archive/refs/heads/pie-release.tar.gz -O gcc.tar.gz
-          mkdir -p gcc
-          # 注意：原命令中文件后缀是.tar.xz，但实际下载的是.tar.gz，需修正解压参数
-          tar -zxf gcc.tar.gz -C gcc --strip-components=1
-          # 验证编译器是否存在
-          ls gcc/bin/aarch64-linux-android-gcc || { echo "编译器下载失败"; exit 1; }
-          echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
-
-      - name: 编译内核（修正版）
-        run: |
-          export ARCH=arm64
-          # 直接通过CC_PATH指定编译器完整路径，避免PATH问题
-          export CROSS_COMPILE=${{ env.CC_PATH }}/aarch64-linux-android-
-          # 验证编译器是否可调用
-          ${CROSS_COMPILE}gcc --version
-          # 加载配置并编译
-          make O=out merge_kirin710_defconfig
-          make O=out -j$(nproc)
-
-      - name: 打包内核镜像
-        run: |
-          cp /out/arch/arm64/boot/Image.gz kernel/tools/
-          sed -i -e 's/--kernel kernel/--kernel Image.gz/' /tools/pack_kernerimage_cmd.sh
-          sed -i -e 's/--output kernel.img/--output KernelSU_$(date +%Y%m%d).img/' kernel/tools/pack_kernerimage_cmd.sh
-          bash /tools/pack_kernerimage_cmd.sh
-
-      - name: 生成GitHub发行版
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: kernel-${{ github.sha }}
-          files: /tools/KernelSU_*.img
-          body: "华为4.9系内核（EMUI9.1）集成KernelSU自动编译版本"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
