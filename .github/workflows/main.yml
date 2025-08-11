@@ -49,7 +49,7 @@ jobs:
           export ARCH=arm64
           export PATH=$PATH:${{ env.CC_PATH }}
           export CROSS_COMPILE=aarch64-linux-android-
-          make O=out XXXXXX_defconfig  # 替换为实际defconfig
+          make O=out /arch/arm64/configs/merge_kirin710_defconfig  # 替换为实际defconfig
           make O=out -j$(nproc)
 
       - name: 打包内核镜像
