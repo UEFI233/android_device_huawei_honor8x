@@ -1,15 +1,15 @@
-name: 华为4.9内核集成KernelSU编译
+name: 华为4.9内核集成KernelSU编译（Ubuntu 24.04适配）
 
 on:
   push:
     branches: [ EMUI9.1-sukiultra ]
     paths:
-      - 'kernel/**'  # 内核源码目录变动时触发
-  workflow_dispatch:  # 允许手动触发
+      - 'kernel/**'
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest  # 兼容Python 2.7及编译环境
+    runs-on: ubuntu-latest
 
     steps:
       - name: 拉取代码
@@ -17,13 +17,24 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: 安装依赖
+      - name: 安装基础依赖
         run: |
           sudo apt update
           sudo apt install -y build-essential libncurses5-dev libssl-dev \
-            flex bison bc python2 git wget
-          # 配置Python 2.7为默认
-          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+            flex bison bc git wget curl
+
+      - name: 手动安装Python 2.7（Ubuntu 24.04适配）
+        run: |
+          # 下载Python 2.7源码并编译
+          wget https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
+          tar -xf Python-2.7.18.tgz
+          cd Python-2.7.18
+          ./configure --prefix=/usr/local
+          make -j$(nproc)
+          sudo make install
+          # 建立软链接
+          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python
+          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
 
       - name: 获取华为GCC交叉编译器
         run: |
@@ -38,17 +49,14 @@ jobs:
           export ARCH=arm64
           export PATH=$PATH:${{ env.CC_PATH }}
           export CROSS_COMPILE=aarch64-linux-android-
-          make O=out XXXXXX_defconfig  # 替换为实际defconfig文件名
-          make O=out -j$(nproc)  # 根据CPU核心数自动分配线程
+          make O=out XXXXXX_defconfig  # 替换为实际defconfig
+          make O=out -j$(nproc)
 
       - name: 打包内核镜像
         run: |
-          # 复制编译产物到tools目录
           cp kernel/out/arch/arm64/boot/Image.gz kernel/tools/
-          # 修改打包脚本（根据文档第六节）
           sed -i -e 's/--kernel kernel/--kernel Image.gz/' kernel/tools/pack_kernerimage_cmd.sh
           sed -i -e 's/--output kernel.img/--output KernelSU_$(date +%Y%m%d).img/' kernel/tools/pack_kernerimage_cmd.sh
-          # 执行打包
           bash kernel/tools/pack_kernerimage_cmd.sh
 
       - name: 生成GitHub发行版
@@ -56,6 +64,6 @@ jobs:
         with:
           tag_name: kernel-${{ github.sha }}
           files: kernel/tools/KernelSU_*.img
-          body: "华为4.9系内核集成KernelSU自动编译版本"
+          body: "华为4.9系内核（EMUI9.1）集成KernelSU自动编译版本"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
