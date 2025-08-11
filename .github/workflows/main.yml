@@ -35,21 +35,26 @@ jobs:
           # 建立软链接
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
-
       - name: 获取华为GCC交叉编译器
         run: |
-          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/pie-release.tar.gz -O gcc.tar.xz
+          # 使用正确的Google源aarch64-linux-android-4.9编译器
+          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/  +archive/refs/heads/pie-release.tar.gz -O gcc.tar.gz
           mkdir -p gcc
-          tar -xf gcc.tar.xz -C gcc --strip-components=1
+          # 注意：原命令中文件后缀是.tar.xz，但实际下载的是.tar.gz，需修正解压参数
+          tar -zxf gcc.tar.gz -C gcc --strip-components=1
+          # 验证编译器是否存在
+          ls gcc/bin/aarch64-linux-android-gcc || { echo "编译器下载失败"; exit 1; }
           echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
 
-      - name: 编译内核
+      - name: 编译内核（修正版）
         run: |
-          DEFCONFIG_PATH="arch/arm64/configs/merge_kirin710_defconfig"
           export ARCH=arm64
-          export PATH=$PATH:${{ env.CC_PATH }}
-          export CROSS_COMPILE=aarch64-linux-android-
-          make O=out merge_kirin710_defconfig  # 替换为实际defconfig
+          # 直接通过CC_PATH指定编译器完整路径，避免PATH问题
+          export CROSS_COMPILE=${{ env.CC_PATH }}/aarch64-linux-android-
+          # 验证编译器是否可调用
+          ${CROSS_COMPILE}gcc --version
+          # 加载配置并编译
+          make O=out merge_kirin710_defconfig
           make O=out -j$(nproc)
 
       - name: 打包内核镜像
