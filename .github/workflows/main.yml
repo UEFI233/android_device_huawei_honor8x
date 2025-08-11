@@ -1,0 +1,61 @@
+name: 华为4.9内核集成KernelSU编译
+
+on:
+  push:
+    branches: [ EMUI9.1-sukiultra ]
+    paths:
+      - 'kernel/**'  # 内核源码目录变动时触发
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # 兼容Python 2.7及编译环境
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: 安装依赖
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libncurses5-dev libssl-dev \
+            flex bison bc python2 git wget
+          # 配置Python 2.7为默认
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+
+      - name: 获取华为GCC交叉编译器
+        run: |
+          wget https://developer.huawei.com/consumer/cn/doc/development/tool/release-notes/aarch64-linux-android-4.9 -O gcc.tar.xz
+          mkdir -p gcc
+          tar -xf gcc.tar.xz -C gcc --strip-components=1
+          echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
+
+      - name: 编译内核
+        run: |
+          cd kernel
+          export ARCH=arm64
+          export PATH=$PATH:${{ env.CC_PATH }}
+          export CROSS_COMPILE=aarch64-linux-android-
+          make O=out XXXXXX_defconfig  # 替换为实际defconfig文件名
+          make O=out -j$(nproc)  # 根据CPU核心数自动分配线程
+
+      - name: 打包内核镜像
+        run: |
+          # 复制编译产物到tools目录
+          cp kernel/out/arch/arm64/boot/Image.gz kernel/tools/
+          # 修改打包脚本（根据文档第六节）
+          sed -i -e 's/--kernel kernel/--kernel Image.gz/' kernel/tools/pack_kernerimage_cmd.sh
+          sed -i -e 's/--output kernel.img/--output KernelSU_$(date +%Y%m%d).img/' kernel/tools/pack_kernerimage_cmd.sh
+          # 执行打包
+          bash kernel/tools/pack_kernerimage_cmd.sh
+
+      - name: 生成GitHub发行版
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: kernel-${{ github.sha }}
+          files: kernel/tools/KernelSU_*.img
+          body: "华为4.9系内核集成KernelSU自动编译版本"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
