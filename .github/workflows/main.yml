@@ -1,10 +1,12 @@
-name: 华为4.9内核集成KernelSU编译（Ubuntu 24.04适配）
+name: 华为4.9内核编译
 
 on:
   push:
     branches: [ EMUI9.1-sukiultra ]
     paths:
-      - 'kernel/**'
+      - 'arch/**'
+      - 'drivers/**'
+      - 'Makefile'
   workflow_dispatch:
 
 jobs:
@@ -12,29 +14,60 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 拉取代码
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
 
       - name: 安装基础依赖
         run: |
           sudo apt update
           sudo apt install -y build-essential libncurses5-dev libssl-dev \
-            flex bison bc git wget curl
+            flex bison bc git wget curl unzip
 
-      - name: 手动安装Python 2.7（Ubuntu 24.04适配）
+      - name: 安装Python 2.7
         run: |
-          # 下载Python 2.7源码并编译
           wget https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz
           tar -xf Python-2.7.18.tgz
           cd Python-2.7.18
           ./configure --prefix=/usr/local
           make -j$(nproc)
           sudo make install
-          # 建立软链接
           sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python
-          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
+
+      - name: 克隆GCC交叉编译器
+        run: |
+          if [ ! -d "gcc" ]; then
+            git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc
+          fi
+          ls gcc/bin/aarch64-linux-android-gcc || { echo "GCC缺失"; exit 1; }
+          echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
+
+      - name: 清理Kconfig无效字符
+        run: |
+          find . -name "Kconfig" -exec sed -i 's/[^[:print:]\t\n]//g' {} +
+
+      - name: 编译内核
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=${{ env.CC_PATH }}/aarch64-linux-android-
+          ${CROSS_COMPILE}gcc --version
+          make O=out merge_kirin710_defconfig
+          make O=out -j$(nproc)
+
+      - name: 打包内核镜像
+        run: |
+          cp out/arch/arm64/boot/Image.gz tools/
+          sed -i -e 's/--kernel kernel/--kernel Image.gz/' tools/pack_kernerimage_cmd.sh
+          sed -i -e 's/--output kernel.img/--output KernelSU_$(date +%Y%m%d).img/' tools/pack_kernerimage_cmd.sh
+          bash tools/pack_kernerimage_cmd.sh
+
+      - name: 生成GitHub发行版
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: kernel-${{ github.sha }}
+          files: tools/KernelSU_*.img
+          body: "华为Kirin710内核（EMUI9.1）自动编译版本"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}          sudo ln -sf /usr/local/bin/python2.7 /usr/bin/python2
       - name: 获取华为GCC交叉编译器
         run: |
           # 使用正确的Google源aarch64-linux-android-4.9编译器
