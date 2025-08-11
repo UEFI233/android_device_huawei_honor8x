@@ -38,7 +38,7 @@ jobs:
 
       - name: 获取华为GCC交叉编译器
         run: |
-          wget https://developer.huawei.com/consumer/cn/doc/development/tool/release-notes/aarch64-linux-android-4.9 -O gcc.tar.xz
+          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/pie-release.tar.gz -O gcc.tar.xz
           mkdir -p gcc
           tar -xf gcc.tar.xz -C gcc --strip-components=1
           echo "CC_PATH=$(pwd)/gcc/bin" >> $GITHUB_ENV
