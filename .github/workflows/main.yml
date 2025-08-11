@@ -45,25 +45,25 @@ jobs:
 
       - name: 编译内核
         run: |
-          cd kernel
+          DEFCONFIG_PATH="arch/arm64/configs/merge_kirin710_defconfig"
           export ARCH=arm64
           export PATH=$PATH:${{ env.CC_PATH }}
           export CROSS_COMPILE=aarch64-linux-android-
-          make O=out /arch/arm64/configs/merge_kirin710_defconfig  # 替换为实际defconfig
+          make O=out merge_kirin710_defconfig  # 替换为实际defconfig
           make O=out -j$(nproc)
 
       - name: 打包内核镜像
         run: |
-          cp kernel/out/arch/arm64/boot/Image.gz kernel/tools/
-          sed -i -e 's/--kernel kernel/--kernel Image.gz/' kernel/tools/pack_kernerimage_cmd.sh
+          cp /out/arch/arm64/boot/Image.gz kernel/tools/
+          sed -i -e 's/--kernel kernel/--kernel Image.gz/' /tools/pack_kernerimage_cmd.sh
           sed -i -e 's/--output kernel.img/--output KernelSU_$(date +%Y%m%d).img/' kernel/tools/pack_kernerimage_cmd.sh
-          bash kernel/tools/pack_kernerimage_cmd.sh
+          bash /tools/pack_kernerimage_cmd.sh
 
       - name: 生成GitHub发行版
         uses: softprops/action-gh-release@v1
         with:
           tag_name: kernel-${{ github.sha }}
-          files: kernel/tools/KernelSU_*.img
+          files: /tools/KernelSU_*.img
           body: "华为4.9系内核（EMUI9.1）集成KernelSU自动编译版本"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
