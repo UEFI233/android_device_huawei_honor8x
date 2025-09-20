@@ -1,102 +1,286 @@
-name: Build Honor8X KSU_NEXT Kernel
+name: Build Honor8x Kirin710 4.9 kernel with SukiSU-Ultra & KPM
+
 on:
-  workflow_dispatch:
-    inputs:  # 手动触发时可填写的参数
-      build_note:
-        description: '构建备注（如测试版本、特殊说明）'
-        required: false
-        default: '常规构建'
-      is_test:
-        description: '是否为测试版本'
-        required: true
-        default: 'false'
-        type: boolean  # 支持布尔值选择
-  # 保留原有的 schedule、push、pull_request 配置
-  schedule:
-    - cron: '00 12 * * 6'
-  push:
-    branches: [HEAD]
-  pull_request:
-    branches: [HEAD]
+  workflow_dispatch:            # 手动触发
+  # push:
+  #   branches: [ "EMUI9.1" ]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    env:
-      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_MAXSIZE: "2G"
-      CCACHE_HARDLINK: "true"
-      KERNEL_CMDLINE: "ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- O=out"
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-      with:
-        submodules: 'true'
-        fetch-depth: 100
+    # 0. 清理空间
+    - name: Free disk
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                     "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android
 
-    - name: Set up ccache
-      uses: hendrikmuhs/ccache-action@v1.2
+    # 1. 基础工具
+    - name: Install deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git ccache automake flex lzop bison \
+                                build-essential zip unzip libssl-dev \
+                                bc python3 curl wget libelf-dev libncurses5-dev
 
-    - name: Install dependencies
+    # 2. 拉内核源码（EMUI9.1 分支）
+    - name: Clone kernel
       run: |
-        sudo apt-get update -y 
-        sudo apt install binutils make python2 libssl-dev flex unzip libssl-dev ca-certificates xz-utils mkbootimg cpio device-tree-compiler git git-lfs bc bison build-essential ccache curl flex g++-9 gcc-9 git git-lfs gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev adb fastboot -y
-        git clone https://github.com/Coconutat/ToolChains.git --dept=1 -b google_gcc_pie
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 100
-        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 100
-    
-    - name: GetTime
-      id: get_time
+        git clone https://github.com/UEFI233/android_device_huawei_honor8x.git \
+                  --depth=1 --single-branch -b EMUI9.1 kernel
+        echo "KERNEL_DIR=$PWD/kernel" >> $GITHUB_ENV
+
+    # 3. 拉 gcc-4.9 交叉编译器
+    - name: Clone gcc
       run: |
-        echo "TIME=$(TZ=UTC-8 date +%m%d%H%M )" >> $GITHUB_OUTPUT
-    
-    - name: Copy KSU_NEXT Support File
+        git clone https://github.com/KudProject/aarch64-linux-android-4.9.git \
+                  --depth=1 gcc-4.9
+        echo "GCC_DIR=$PWD/gcc-4.9" >> $GITHUB_ENV
+
+    # 4. 在线打入 SukiSU-Ultra（含 KPM）
+    - name: Integrate SukiSU-Ultra
       run: |
-       cp $(pwd)/KSU_NEXT_DISCOVER/drivers/input/input.c $(pwd)/drivers/input/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/exec.c $(pwd)/fs/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/namespace.c $(pwd)/fs/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/open.c $(pwd)/fs/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/read_write.c $(pwd)/fs/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/stat.c $(pwd)/fs/
-       cp $(pwd)/KSU_NEXT_DISCOVER/fs/devpts/inode.c $(pwd)/fs/devpts/
-       cp $(pwd)/KSU_NEXT_DISCOVER/security/selinux/hooks.c $(pwd)/security/selinux/
-      
-    - name: Build KSU_NEXT Kernel
+        cd $KERNEL_DIR
+        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s nongki
+
+    # 5. 统一打完整补丁（含 exec.c 的 do_execveat_common 改动）
+    - name: Apply KernelSU hooks
       run: |
-       sudo ln -sf /usr/bin/python2.7 /usr/bin/python
-       if [ -d include/config ];
-        then
-         echo "Find config,will remove it"
-         rm -rf include/config
-       else
-        echo "No Config,good."
-       fi
-       rm -rf KernelSU
-       rm -rf drivers/kernelsu
-       curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
-       export PATH=$(pwd)/ToolChains/bin/:$PATH/
-       export ARCH=arm64
-       export SUBARCH=arm64
-       sudo chmod -R 777 $(pwd)/
-       make $KERNEL_CMDLINE merge_kirin710_defconfig
-       make $KERNEL_CMDLINE -j$(nproc --all)
-       tools/mkbootimg --kernel out/arch/arm64/boot/Image.gz --base 0x0 --cmdline "loglevel=4 initcall_debug=n page_tracker=on slub_min_objects=16 unmovable_isolate1=2:192M,3:224M,4:256M printktimer=0xfff0a000,0x534,0x538 androidboot.selinux=enforcing buildvariant=user" --tags_offset 0x07A00000 --kernel_offset 0x00080000 --ramdisk_offset 0x07c00000 --header_version 1 --os_version 9 --os_patch_level 2020-09-05  --output Kernel-KSU_NEXT-enforcing-${{ steps.get_time.outputs.TIME }}.img
-       tools/mkbootimg --kernel out/arch/arm64/boot/Image.gz --base 0x0 --cmdline "loglevel=4 initcall_debug=n page_tracker=on slub_min_objects=16 unmovable_isolate1=2:192M,3:224M,4:256M printktimer=0xfff0a000,0x534,0x538 androidboot.selinux=permissive buildvariant=user" --tags_offset 0x07A00000 --kernel_offset 0x00080000 --ramdisk_offset 0x07c00000 --header_version 1 --os_version 9 --os_patch_level 2020-09-05  --output Kernel-KSU_NEXT-permissive-${{ steps.get_time.outputs.TIME }}.img
-       
-    - name: Upload KSU_NEXT Kernel
+        cd $KERNEL_DIR
+        cat > ksu.patch <<'EOF'
+diff --git a/fs/exec.c b/fs/exec.c
+index 0000000..1111111 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1890,6 +1890,11 @@ static int __do_execve_file(int fd, struct filename *filename,
+ 	return retval;
+ }
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_execveat_hook __read_mostly;
++extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);
++extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);
++#endif
+ static int do_execveat_common(int fd, struct filename *filename,
+ 			      struct user_arg_ptr argv,
+ 			      struct user_arg_ptr envp,
+ 			      int flags)
+ {
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_execveat_hook))
++		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
++	else
++		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
++#endif
+ 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
+ }
+diff --git a/fs/open.c b/fs/open.c
+index 0000000..1111111 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -355,6 +355,10 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+ 	return ksys_fallocate(fd, mode, offset, len);
+ }
+ 
++#ifdef CONFIG_KSU
++extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
++			 int *flags);
++#endif
+ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ {
++#ifdef CONFIG_KSU
++	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
++#endif
+ 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+ 		return -EINVAL;
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 0000000..1111111 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -434,6 +434,11 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
+ }
+ EXPORT_SYMBOL(kernel_read);
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_vfs_read_hook __read_mostly;
++extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
++			size_t *count_ptr, loff_t **pos);
++#endif
+ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ {
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_vfs_read_hook))
++		ksu_handle_vfs_read(&file, &buf, &count, &pos);
++#endif
+ 	if (!(file->f_mode & FMODE_READ))
+ 		return -EBADF;
+diff --git a/fs/stat.c b/fs/stat.c
+index 0000000..1111111 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -87,6 +87,10 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
+ }
+ EXPORT_SYMBOL(vfs_fstat);
+ 
++#ifdef CONFIG_KSU
++extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
++#endif
+ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
+ 		int flag)
+ {
++#ifdef CONFIG_KSU
++	ksu_handle_stat(&dfd, &filename, &flag);
++#endif
+ 	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+ 		      AT_EMPTY_PATH)) != 0)
+ 		return -EINVAL;
+diff --git a/drivers/input/input.c b/drivers/input/input.c
+index 0000000..1111111 100644
+--- a/drivers/input/input.c
++++ b/drivers/input/input.c
+@@ -367,6 +367,10 @@ static int input_get_disposition(struct input_dev *dev,
+ 	return disposition;
+ }
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_input_hook __read_mostly;
++extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
++#endif
+ static void input_handle_event(struct input_dev *dev,
+ 			       unsigned int type, unsigned int code, int value)
+ {
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_input_hook))
++		ksu_handle_input_handle_event(&type, &code, &value);
++#endif
+ 	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
+ 		add_input_randomness(type, code, value);
+diff --git a/fs/devpts/inode.c b/fs/devpts/inode.c
+index 0000000..1111111 100644
+--- a/fs/devpts/inode.c
++++ b/fs/devpts/inode.c
+@@ -602,6 +602,9 @@ struct dentry *devpts_pty_new(struct pts_fs_info *fsi, int index, void *priv)
+ 	return dentry;
+ }
+ 
++#ifdef CONFIG_KSU
++extern int ksu_handle_devpts(struct inode*);
++#endif
+ void *devpts_get_priv(struct dentry *dentry)
+ {
++#ifdef CONFIG_KSU
++	ksu_handle_devpts(dentry->d_inode);
++#endif
+ 	if (dentry->d_sb->s_magic != DEVPTS_SUPER_MAGIC)
+ 		return NULL;
+ 	return dentry->d_fsdata;
+diff --git a/fs/namespace.c b/fs/namespace.c
+index 0000000..1111111 100644
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -1739,6 +1739,39 @@ static inline bool may_mandlock(void)
+ }
+ #endif
+ 
++static int can_umount(const struct path *path, int flags)
++{
++	struct mount *mnt = real_mount(path->mnt);
++	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
++		return -EINVAL;
++	if (!may_mount())
++		return -EPERM;
++	if (path->dentry != path->mnt->mnt_root)
++		return -EINVAL;
++	if (!check_mnt(mnt))
++		return -EINVAL;
++	if (mnt->mnt.mnt_flags & MNT_LOCKED)
++		return -EINVAL;
++	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++	return 0;
++}
++
++int path_umount(struct path *path, int flags)
++{
++	struct mount *mnt = real_mount(path->mnt);
++	int ret;
++	ret = can_umount(path, flags);
++	if (!ret)
++		ret = do_umount(mnt, flags);
++	dput(path->dentry);
++	mntput_no_expire(mnt);
++	return ret;
++}
+EOF
+        git apply ksu.patch
+
+    # 6. 修改 defconfig
+    - name: Modify merge_kirin710_defconfig
+      run: |
+        cd $KERNEL_DIR
+        DEF=arch/arm64/configs/merge_kirin710_defconfig
+        # 统一关闭华为安全模块
+        for cfg in HISI_PMALLOC HIVIEW_SELINUX HISI_SELINUX_EBITMAP_RO \
+                   HISI_SELINUX_PROT HISI_RO_LSM_HOOKS INTEGRITY \
+                   INTEGRITY_AUDIT HUAWEI_CRYPTO_TEST_MDPP HUAWEI_SELINUX_DSM \
+                   HUAWEI_HIDESYMS HW_SLUB_SANITIZE HUAWEI_PROC_CHECK_ROOT \
+                   HW_ROOT_SCAN HUAWEI_EIMA HUAWEI_EIMA_ACCESS_CONTROL \
+                   HW_DOUBLE_FREE_DYNAMIC_CHECK HKIP_ATKINFO HW_KERNEL_STP \
+                   HISI_HHEE HISI_HHEE_TOKEN HISI_DIEID HISI_SUBPMU \
+                   TEE_ANTIROOT_CLIENT HWAA; do
+          sed -i "/CONFIG_${cfg}=/d" $DEF
+          echo "# CONFIG_${cfg} is not set" >> $DEF
+        done
+        # 关闭 AVB
+        sed -i '/CONFIG_DM_VERITY=/d' $DEF
+        echo "# CONFIG_DM_VERITY is not set" >> $DEF
+        echo "# CONFIG_DM_VERITY_AVB is not set" >> $DEF
+        # 强制启用 KSU 与 Permissive SELinux
+        echo "CONFIG_KSU=y"          >> $DEF
+        echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> $DEF
+
+    # 7. 环境变量
+    - name: Export build vars
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=$GCC_DIR/bin/aarch64-linux-android-" >> $GITHUB_ENV
+        echo "CCACHE_DIR=/home/runner/.ccache" >> $GITHUB_ENV
+
+    # 8. 编译
+    - name: Build kernel
+      run: |
+        cd $KERNEL_DIR
+        make O=out ARCH=arm64 merge_kirin710_defconfig
+        make -j$(nproc) O=out \
+             ARCH=arm64 \
+             CROSS_COMPILE=$CROSS_COMPILE \
+             2>&1 | tee build.log
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          echo "❌ Build failed!"
+          exit 1
+        fi
+
+    # 9. 打包 AnyKernel3
+    - name: Pack flashable zip
+      run: |
+        cd $KERNEL_DIR/out/arch/arm64/boot
+        ANY=$KERNEL_DIR/AnyKernel3
+        git clone https://github.com/osm0sis/AnyKernel3.git --depth=1 $ANY
+        cp Image.gz-dtb $ANY/
+        cd $ANY
+        zip -r9 ../SukiSUultra-honor8x-kirin710-$(date +%Y%m%d).zip ./
+        echo "ZIP=$ANY/../SukiSUultra-honor8x-kirin710-$(date +%Y%m%d).zip" >> $GITHUB_ENV
+
+    # 10. 上传产物
+    - name: Upload kernel zip
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-KSU_NEXT-${{ steps.get_time.outputs.TIME }}
-        path: "Kernel-KSU_NEXT-*.img"
-        
-    - name: Create GitHub Release  # 与其他步骤保持相同缩进（如2个空格）
-      uses: softprops/action-gh-release@v1  # 缩进与上一行的name对齐
-      with:  # 缩进与uses对齐
-        tag_name: ${{ steps.get_time.outputs.TIME }}
-        name: Kernel-KSU_NEXT-${{ steps.get_time.outputs.TIME }}
-        files: "Kernel-KSU_NEXT-*.img"
-        draft: false
-        prerelease: false
-      env:  # 缩进与uses、with对齐
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: SukiSUultra-honor8x-kirin710-${{ github.run_number }}
+        path: ${{ env.ZIP }}
+
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: ${{ env.KERNEL_DIR }}/build.log
